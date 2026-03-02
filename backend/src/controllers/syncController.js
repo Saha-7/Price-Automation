@@ -1,6 +1,6 @@
 import Product from '../models/Product.js';
 import UploadLog from '../models/UploadLog.js';
-import mssqlApiService from '../services/mssqlApiService.js';
+import azureSqlService from '../services/azureSqlService.js';
 
 /**
  * Sync Controller
@@ -26,8 +26,8 @@ export const syncFromMSSQL = async (req, res) => {
       uploadedAt: new Date()
     });
 
-    // Fetch combined data from both APIs
-    const combinedData = await mssqlApiService.fetchCombinedData();
+    // Fetch combined data from both SQL databases
+    const combinedData = await azureSqlService.fetchCombinedData();
     
     uploadLog.totalRows = combinedData.length;
     
