@@ -1,177 +1,142 @@
-import sql from 'mssql';
-
 /**
- * Azure SQL Server Service
- * Connects directly to Azure SQL databases using Managed Identity
- * 
- * Database 1: db_Zoho_AMZ_API
- * View: [dbo].[vw_Zoho_Bills_Data]
- * 
- * Database 2: db_returns
- * View: dbo.vw_Shopify_Product_SKUs
+ * azureSqlService.js
+ *
+ * Connects to Azure SQL using Managed Identity.
+ * Reads server/database names from Azure App Service env vars:
+ *
+ *   db_serverendpoint  →  your Azure SQL server URL
+ *   db_zoho            →  zoho database name
+ *   db_returns         →  returns database name
+ *
+ * No username, no password, no ODBC driver needed —
+ * Managed Identity handles authentication automatically.
  */
 
-class AzureSQLService {
-  constructor() {
-    // Database 1: Zoho Bills
-    this.zohoConfig = {
-      server: process.env.AZURE_SQL_SERVER,
-      database: process.env.AZURE_SQL_DATABASE_ZOHO || 'db_Zoho_AMZ_API',
-      authentication: {
-        type: 'azure-active-directory-default' // Uses Managed Identity
-      },
-      options: {
-        encrypt: true,
-        trustServerCertificate: false,
-        connectTimeout: 30000
-      }
-    };
+import sql from 'mssql';
 
-    // Database 2: Returns/Shopify SKUs
-    this.returnsConfig = {
-      server: process.env.AZURE_SQL_SERVER,
-      database: process.env.AZURE_SQL_DATABASE_RETURNS || 'db_returns',
-      authentication: {
-        type: 'azure-active-directory-default' // Uses Managed Identity
-      },
-      options: {
-        encrypt: true,
-        trustServerCertificate: false,
-        connectTimeout: 30000
-      }
-    };
-  }
+// ─── Read env vars set in Azure App Service → Configuration ──────────────────
+const SERVER   = process.env.db_serverendpoint;  // e.g. myserver.database.windows.net
+const DB_ZOHO  = process.env.db_zoho;            // e.g. db_Zoho_AMZ_API
+const DB_RETURNS = process.env.db_returns;       // e.g. db_returns
 
-  /**
-   * Fetch purchase prices from Zoho Bills view
-   * @returns {Promise<Array>} Purchase price data
-   */
-  async fetchPurchasePrices() {
-    let pool;
-    try {
-      console.log('📡 Connecting to db_Zoho_AMZ_API...');
-      
-      pool = await sql.connect(this.zohoConfig);
-      
-      console.log('✅ Connected! Fetching from [dbo].[vw_Zoho_Bills_Data]...');
-      
-      const result = await pool.request().query(`
-        SELECT 
-          Product_Title,
-          Purchase_Price
-        FROM [dbo].[vw_Zoho_Bills_Data]
-      `);
-      
-      console.log(`✅ Fetched ${result.recordset.length} purchase price records`);
-      
-      return result.recordset;
-      
-    } catch (error) {
-      console.error('❌ Error fetching purchase prices:', error.message);
-      throw new Error(`Failed to fetch purchase prices: ${error.message}`);
-    } finally {
-      if (pool) {
-        await pool.close();
-      }
-    }
-  }
+// Validate on startup so failures are obvious immediately
+if (!SERVER)     throw new Error('Missing env var: db_serverendpoint');
+if (!DB_ZOHO)    throw new Error('Missing env var: db_zoho');
+if (!DB_RETURNS) throw new Error('Missing env var: db_returns');
 
-  /**
-   * Fetch Shopify SKU data from returns database
-   * @returns {Promise<Array>} Shopify SKU data
-   */
-  async fetchShopifySKUs() {
-    let pool;
-    try {
-      console.log('📡 Connecting to db_returns...');
-      
-      pool = await sql.connect(this.returnsConfig);
-      
-      console.log('✅ Connected! Fetching from dbo.vw_Shopify_Product_SKUs...');
-      
-      const result = await pool.request().query(`
-        SELECT 
-          Product_Type,
-          SKU,
-          Brand,
-          Price,
-          ComparePrice
-        FROM dbo.vw_Shopify_Product_SKUs
-      `);
-      
-      console.log(`✅ Fetched ${result.recordset.length} Shopify SKU records`);
-      
-      return result.recordset;
-      
-    } catch (error) {
-      console.error('❌ Error fetching Shopify SKUs:', error.message);
-      throw new Error(`Failed to fetch Shopify SKUs: ${error.message}`);
-    } finally {
-      if (pool) {
-        await pool.close();
-      }
-    }
-  }
+// ─── Managed Identity config builder ─────────────────────────────────────────
 
-  /**
-   * Fetch and combine data from both databases
-   * @returns {Promise<Array>} Combined product data
-   */
-  async fetchCombinedData() {
-    try {
-      console.log('🔄 Fetching data from both SQL databases...');
+function buildConfig(database) {
+  return {
+    server: SERVER,
+    database,
+    authentication: {
+      type: 'azure-active-directory-default', // Uses Managed Identity — no credentials needed
+    },
+    options: {
+      encrypt: true,
+      trustServerCertificate: false,
+      connectTimeout: 30_000,
+    },
+  };
+}
 
-      // Fetch from both databases in parallel
-      const [purchasePrices, shopifySKUs] = await Promise.all([
-        this.fetchPurchasePrices(),
-        this.fetchShopifySKUs()
-      ]);
+// ─── Generic query helper ─────────────────────────────────────────────────────
 
-      // Combine the data
-      const combinedData = this.combineData(purchasePrices, shopifySKUs);
-      
-      console.log(`✅ Combined data for ${combinedData.length} products`);
-      
-      return combinedData;
-      
-    } catch (error) {
-      console.error('❌ Error fetching combined data:', error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Combine purchase price and SKU data
-   * Matches by product title (case-insensitive)
-   * 
-   * @param {Array} purchasePrices - Data from vw_Zoho_Bills_Data
-   * @param {Array} shopifySKUs - Data from vw_Shopify_Product_SKUs
-   * @returns {Array} Combined product data
-   */
-  combineData(purchasePrices, shopifySKUs) {
-    const combined = shopifySKUs.map(skuData => {
-      // Try to find matching purchase price by product title
-      const matchingPrice = purchasePrices.find(priceData => {
-        const title1 = (priceData.Product_Title || '').toLowerCase().trim();
-        const title2 = (skuData.Product_Title || '').toLowerCase().trim();
-        return title1 === title2;
-      });
-
-      return {
-        sku: skuData.SKU,
-        productName: skuData.Product_Title || 'Unknown',
-        productType: skuData.Product_Type,
-        brand: skuData.Brand,
-        mrp: skuData.Price,
-        currentSellingPrice: skuData.ComparePrice,
-        purchasePrice: matchingPrice ? matchingPrice.Purchase_Price : null,
-        dataSource: 'api_sync'
-      };
-    });
-
-    return combined;
+async function queryDB(database, queryString) {
+  let pool;
+  try {
+    pool = await sql.connect(buildConfig(database));
+    const result = await pool.request().query(queryString);
+    return result.recordset;
+  } finally {
+    if (pool) await pool.close();
   }
 }
 
-// Export singleton instance
-export default new AzureSQLService();
+// ─── Fetch from Zoho view ─────────────────────────────────────────────────────
+
+async function fetchPurchasePrices() {
+  console.log(`📡 Connecting to ${DB_ZOHO} → [dbo].[vw_Zoho_Bills_Data]...`);
+
+  const rows = await queryDB(
+    DB_ZOHO,
+    `SELECT
+       Product_Title,
+       Purchase_Price
+     FROM [dbo].[vw_Zoho_Bills_Data]`
+  );
+
+  console.log(`   ✅ ${rows.length} rows fetched`);
+  return rows;
+}
+
+// ─── Fetch from Shopify SKUs view ─────────────────────────────────────────────
+// NOTE: Product_Title is included here so combineData() can match on it
+
+async function fetchShopifySKUs() {
+  console.log(`📡 Connecting to ${DB_RETURNS} → dbo.vw_Shopify_Product_SKUs...`);
+
+  const rows = await queryDB(
+    DB_RETURNS,
+    `SELECT
+       Product_Title,
+       Product_Type,
+       SKU,
+       Brand,
+       Price,
+       ComparePrice
+     FROM dbo.vw_Shopify_Product_SKUs`
+  );
+
+  console.log(`   ✅ ${rows.length} rows fetched`);
+  return rows;
+}
+
+// ─── Combine both datasets ────────────────────────────────────────────────────
+// Joins on Product_Title (case-insensitive) to attach purchase price to each SKU
+
+function combineData(zohoRows, shopifyRows) {
+  // Build lookup map: lowercase Product_Title → Purchase_Price
+  const priceMap = new Map();
+  for (const row of zohoRows) {
+    const key = (row.Product_Title || '').toLowerCase().trim();
+    if (key) priceMap.set(key, row.Purchase_Price);
+  }
+
+  return shopifyRows.map(row => {
+    const key = (row.Product_Title || '').toLowerCase().trim();
+    return {
+      sku:                 row.SKU          ?? null,
+      productName:         row.Product_Title ?? null,
+      productType:         row.Product_Type  ?? null,
+      brand:               row.Brand         ?? null,
+      mrp:                 row.Price         ?? null,
+      currentSellingPrice: row.ComparePrice  ?? null,
+      purchasePrice:       priceMap.get(key) ?? null, // null = no Zoho match found
+      dataSource:          'api_sync',
+    };
+  });
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+async function fetchCombinedData() {
+  console.log('🔄 Fetching from both SQL databases in parallel...');
+
+  const [zohoRows, shopifyRows] = await Promise.all([
+    fetchPurchasePrices(),
+    fetchShopifySKUs(),
+  ]);
+
+  const combined = combineData(zohoRows, shopifyRows);
+  console.log(`✅ Combined ${combined.length} products`);
+
+  return { zohoRows, shopifyRows, combined };
+}
+
+export default {
+  fetchPurchasePrices,
+  fetchShopifySKUs,
+  fetchCombinedData,
+};
