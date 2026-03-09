@@ -1,37 +1,56 @@
 /**
  * azureSqlService.js
  *
- * Connects to Azure SQL using Managed Identity.
- * Reads server/database names from Azure App Service env vars:
+ * Connects to Azure SQL using a User-Assigned Managed Identity (UAMI).
  *
- *   db_serverendpoint  →  your Azure SQL server URL
- *   db_zoho            →  zoho database name
- *   db_returns         →  returns database name
+ * Azure App Service env vars required (set in Azure Portal → Configuration):
+ *   db_serverendpoint  → Azure SQL server URL
+ *   db_zoho            → Zoho database name
+ *   db_returns         → Returns/Shopify database name
+ *   db_userclientid    → Client ID of the User-Assigned Managed Identity
  *
- * No username, no password, no ODBC driver needed —
- * Managed Identity handles authentication automatically.
+ * No username or password needed — UAMI token handles authentication.
  */
 
 import sql from 'mssql';
+import { ManagedIdentityCredential } from '@azure/identity';
 
-// ─── Read env vars set in Azure App Service → Configuration ──────────────────
-const SERVER   = process.env.db_serverendpoint;  // e.g. myserver.database.windows.net
-const DB_ZOHO  = process.env.db_zoho;            // e.g. db_Zoho_AMZ_API
-const DB_RETURNS = process.env.db_returns;       // e.g. db_returns
+// ─── Read env vars from Azure App Service → Configuration ────────────────────
+const SERVER          = process.env.db_serverendpoint;
+const DB_ZOHO         = process.env.db_zoho;
+const DB_RETURNS      = process.env.db_returns;
+const UAMI_CLIENT_ID  = process.env.db_userclientid;  // User-Assigned MI Client ID
 
-// Validate on startup so failures are obvious immediately
-if (!SERVER)     throw new Error('Missing env var: db_serverendpoint');
-if (!DB_ZOHO)    throw new Error('Missing env var: db_zoho');
-if (!DB_RETURNS) throw new Error('Missing env var: db_returns');
+// Validate all required env vars on startup
+if (!SERVER)         throw new Error('Missing env var: db_serverendpoint');
+if (!DB_ZOHO)        throw new Error('Missing env var: db_zoho');
+if (!DB_RETURNS)     throw new Error('Missing env var: db_returns');
+if (!UAMI_CLIENT_ID) throw new Error('Missing env var: db_userclientid');
 
-// ─── Managed Identity config builder ─────────────────────────────────────────
+// Azure SQL requires this exact scope to issue a token
+const SQL_SCOPE = 'https://database.windows.net//.default';
 
-function buildConfig(database) {
+// ─── Get access token from User-Assigned Managed Identity ────────────────────
+
+async function getAccessToken() {
+  const credential = new ManagedIdentityCredential({
+    clientId: UAMI_CLIENT_ID,  // Tells Azure which user-assigned identity to use
+  });
+  const token = await credential.getToken(SQL_SCOPE);
+  return token.token;
+}
+
+// ─── Build mssql config using the access token ───────────────────────────────
+
+function buildConfig(database, accessToken) {
   return {
     server: SERVER,
     database,
     authentication: {
-      type: 'azure-active-directory-default', // Uses Managed Identity — no credentials needed
+      type: 'azure-active-directory-access-token',
+      options: {
+        token: accessToken,
+      },
     },
     options: {
       encrypt: true,
@@ -43,10 +62,10 @@ function buildConfig(database) {
 
 // ─── Generic query helper ─────────────────────────────────────────────────────
 
-async function queryDB(database, queryString) {
+async function queryDB(database, queryString, accessToken) {
   let pool;
   try {
-    pool = await sql.connect(buildConfig(database));
+    pool = await sql.connect(buildConfig(database, accessToken));
     const result = await pool.request().query(queryString);
     return result.recordset;
   } finally {
@@ -56,7 +75,7 @@ async function queryDB(database, queryString) {
 
 // ─── Fetch from Zoho view ─────────────────────────────────────────────────────
 
-async function fetchPurchasePrices() {
+async function fetchPurchasePrices(accessToken) {
   console.log(`📡 Connecting to ${DB_ZOHO} → [dbo].[vw_Zoho_Bills_Data]...`);
 
   const rows = await queryDB(
@@ -64,7 +83,8 @@ async function fetchPurchasePrices() {
     `SELECT
        Product_Title,
        Purchase_Price
-     FROM [dbo].[vw_Zoho_Bills_Data]`
+     FROM [dbo].[vw_Zoho_Bills_Data]`,
+    accessToken
   );
 
   console.log(`   ✅ ${rows.length} rows fetched`);
@@ -72,9 +92,8 @@ async function fetchPurchasePrices() {
 }
 
 // ─── Fetch from Shopify SKUs view ─────────────────────────────────────────────
-// NOTE: Product_Title is included here so combineData() can match on it
 
-async function fetchShopifySKUs() {
+async function fetchShopifySKUs(accessToken) {
   console.log(`📡 Connecting to ${DB_RETURNS} → dbo.vw_Shopify_Product_SKUs...`);
 
   const rows = await queryDB(
@@ -86,18 +105,17 @@ async function fetchShopifySKUs() {
        Brand,
        Price,
        ComparePrice
-     FROM dbo.vw_Shopify_Product_SKUs`
+     FROM dbo.vw_Shopify_Product_SKUs`,
+    accessToken
   );
 
   console.log(`   ✅ ${rows.length} rows fetched`);
   return rows;
 }
 
-// ─── Combine both datasets ────────────────────────────────────────────────────
-// Joins on Product_Title (case-insensitive) to attach purchase price to each SKU
+// ─── Combine both datasets on Product_Title ───────────────────────────────────
 
 function combineData(zohoRows, shopifyRows) {
-  // Build lookup map: lowercase Product_Title → Purchase_Price
   const priceMap = new Map();
   for (const row of zohoRows) {
     const key = (row.Product_Title || '').toLowerCase().trim();
@@ -107,13 +125,13 @@ function combineData(zohoRows, shopifyRows) {
   return shopifyRows.map(row => {
     const key = (row.Product_Title || '').toLowerCase().trim();
     return {
-      sku:                 row.SKU          ?? null,
-      productName:         row.Product_Title ?? null,
-      productType:         row.Product_Type  ?? null,
-      brand:               row.Brand         ?? null,
-      mrp:                 row.Price         ?? null,
-      currentSellingPrice: row.ComparePrice  ?? null,
-      purchasePrice:       priceMap.get(key) ?? null, // null = no Zoho match found
+      sku:                 row.SKU           ?? null,
+      productName:         row.Product_Title  ?? null,
+      productType:         row.Product_Type   ?? null,
+      brand:               row.Brand          ?? null,
+      mrp:                 row.Price          ?? null,
+      currentSellingPrice: row.ComparePrice   ?? null,
+      purchasePrice:       priceMap.get(key)  ?? null,
       dataSource:          'api_sync',
     };
   });
@@ -122,11 +140,14 @@ function combineData(zohoRows, shopifyRows) {
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 async function fetchCombinedData() {
-  console.log('🔄 Fetching from both SQL databases in parallel...');
+  console.log('🔄 Getting UAMI access token...');
+  const accessToken = await getAccessToken();
+  console.log('   ✅ Token acquired');
 
+  console.log('🔄 Fetching from both SQL databases in parallel...');
   const [zohoRows, shopifyRows] = await Promise.all([
-    fetchPurchasePrices(),
-    fetchShopifySKUs(),
+    fetchPurchasePrices(accessToken),
+    fetchShopifySKUs(accessToken),
   ]);
 
   const combined = combineData(zohoRows, shopifyRows);
