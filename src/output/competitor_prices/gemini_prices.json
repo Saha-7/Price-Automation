@@ -1,0 +1,50 @@
+{
+  "fetchedAt": "2026-04-01T07:21:01.540Z",
+  "totalProducts": 3,
+  "success": 0,
+  "failed": 3,
+  "products": [
+    {
+      "sku": "BX8070110100",
+      "productName": "Intel Core i3-10100 Processor",
+      "sellers": [],
+      "stats": {
+        "totalCount": 0,
+        "minPrice": null,
+        "maxPrice": null,
+        "avgPrice": null
+      },
+      "searchedAt": "2026-04-01T07:20:51.351Z",
+      "scrapeStatus": "failed",
+      "error": "[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent: [400 Bad Request] API key not valid. Please pass a valid API key. [{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"reason\":\"API_KEY_INVALID\",\"domain\":\"googleapis.com\",\"metadata\":{\"service\":\"generativelanguage.googleapis.com\"}},{\"@type\":\"type.googleapis.com/google.rpc.LocalizedMessage\",\"locale\":\"en-US\",\"message\":\"API key not valid. Please pass a valid API key.\"}]"
+    },
+    {
+      "sku": "WD10EZEX",
+      "productName": "WD Blue 1TB Desktop Hard Disk Drive",
+      "sellers": [],
+      "stats": {
+        "totalCount": 0,
+        "minPrice": null,
+        "maxPrice": null,
+        "avgPrice": null
+      },
+      "searchedAt": "2026-04-01T07:20:55.297Z",
+      "scrapeStatus": "failed",
+      "error": "[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent: [400 Bad Request] API key not valid. Please pass a valid API key. [{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"reason\":\"API_KEY_INVALID\",\"domain\":\"googleapis.com\",\"metadata\":{\"service\":\"generativelanguage.googleapis.com\"}},{\"@type\":\"type.googleapis.com/google.rpc.LocalizedMessage\",\"locale\":\"en-US\",\"message\":\"API key not valid. Please pass a valid API key.\"}]"
+    },
+    {
+      "sku": "MZ-V7S1T0BW",
+      "productName": "Samsung 970 EVO Plus 1TB NVMe SSD",
+      "sellers": [],
+      "stats": {
+        "totalCount": 0,
+        "minPrice": null,
+        "maxPrice": null,
+        "avgPrice": null
+      },
+      "searchedAt": "2026-04-01T07:20:58.538Z",
+      "scrapeStatus": "failed",
+      "error": "[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent: [400 Bad Request] API key not valid. Please pass a valid API key. [{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"reason\":\"API_KEY_INVALID\",\"domain\":\"googleapis.com\",\"metadata\":{\"service\":\"generativelanguage.googleapis.com\"}},{\"@type\":\"type.googleapis.com/google.rpc.LocalizedMessage\",\"locale\":\"en-US\",\"message\":\"API key not valid. Please pass a valid API key.\"}]"
+    }
+  ]
+}
